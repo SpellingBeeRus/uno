@@ -2,7 +2,7 @@
   "name": "uno-game",
   "version": "1.0.0",
   "private": true,
-  "homepage": "https://unoplay.github.io",
+  "homepage": "https://spellingbeerus.github.io/uno",
   "type": "module",
   "scripts": {
     "dev": "vite",

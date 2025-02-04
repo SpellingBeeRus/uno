@@ -6,7 +6,7 @@ import Game from './pages/Game'
 function App() {
   return (
     <ChakraProvider>
-      <Router basename={process.env.PUBLIC_URL}>
+      <Router basename="/uno">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/game/:roomId" element={<Game />} />
