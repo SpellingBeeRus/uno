@@ -33,6 +33,9 @@ export interface GameState {
     isPrivate: boolean
   }
   isHost: boolean
+  canPlayAfterDraw: boolean
+  lastDrawCard: Card | null
+  drawStack: number
 }
 
 export interface ChatMessage {

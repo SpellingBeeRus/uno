@@ -8,7 +8,16 @@ import {
   HStack,
   IconButton,
   useToast,
+  useBreakpointValue,
+  Drawer,
+  DrawerBody,
+  DrawerHeader,
+  DrawerOverlay,
+  DrawerContent,
+  DrawerCloseButton,
+  useDisclosure,
 } from '@chakra-ui/react'
+import { ChatIcon } from '@chakra-ui/icons'
 import { Socket } from 'socket.io-client'
 
 interface ChatProps {
@@ -28,6 +37,8 @@ const Chat = ({ socket, playerName }: ChatProps) => {
   const [newMessage, setNewMessage] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
+  const { isOpen, onOpen, onClose } = useDisclosure()
+  const isMobile = useBreakpointValue({ base: true, md: false })
 
   useEffect(() => {
     if (!socket) return
@@ -70,7 +81,7 @@ const Chat = ({ socket, playerName }: ChatProps) => {
     }
   }
 
-  return (
+  const ChatContent = () => (
     <VStack h="100%" spacing={4}>
       <Box
         flex="1"
@@ -143,6 +154,41 @@ const Chat = ({ socket, playerName }: ChatProps) => {
       </HStack>
     </VStack>
   )
+
+  if (isMobile) {
+    return (
+      <>
+        <IconButton
+          aria-label="Open chat"
+          icon={<ChatIcon />}
+          position="fixed"
+          bottom={4}
+          right={4}
+          colorScheme="blue"
+          size="lg"
+          onClick={onOpen}
+          zIndex={1000}
+        />
+        <Drawer
+          isOpen={isOpen}
+          placement="right"
+          onClose={onClose}
+          size="full"
+        >
+          <DrawerOverlay />
+          <DrawerContent bg="gray.900">
+            <DrawerCloseButton color="white" />
+            <DrawerHeader color="white">Чат</DrawerHeader>
+            <DrawerBody>
+              <ChatContent />
+            </DrawerBody>
+          </DrawerContent>
+        </Drawer>
+      </>
+    )
+  }
+
+  return <ChatContent />
 }
 
 export default Chat 

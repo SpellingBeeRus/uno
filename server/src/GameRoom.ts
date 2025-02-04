@@ -8,6 +8,9 @@ export class GameRoom {
   private currentPlayerIndex: number
   private gameStarted: boolean
   private direction: 1 | -1
+  private drawStack: number = 0 // Для накопления +2 и +4
+  private lastDrawCard: Card | null = null // Последняя взятая карта
+  private canPlayAfterDraw: boolean = false // Можно ли сыграть после взятия карты
   private settings: {
     maxPlayers: number
     allowSpectators: boolean
@@ -178,7 +181,10 @@ export class GameRoom {
           p.id === playerId 
             ? { ...p, cards: player.cards } // Показываем карты только текущему игроку
             : p // Оставляем пустые карты для других игроков
-        )
+        ),
+        canPlayAfterDraw: this.canPlayAfterDraw,
+        lastDrawCard: this.lastDrawCard,
+        drawStack: this.drawStack
       };
     }
     
@@ -225,21 +231,21 @@ export class GameRoom {
     }
 
     // Проверяем, есть ли такая карта у игрока
-    const hasCard = player.cards.some(c => 
+    const cardIndex = player.cards.findIndex(c => 
       c.color === card.color && c.value === card.value
     )
-    if (!hasCard) {
+    if (cardIndex === -1) {
       throw new Error('У вас нет такой карты')
     }
 
     // Удаляем карту из руки игрока
-    player.cards = player.cards.filter(c => 
-      !(c.color === card.color && c.value === card.value)
-    )
+    player.cards.splice(cardIndex, 1)
     player.cardsCount = player.cards.length
 
     // Обновляем текущую карту
     this.currentCard = card
+    this.lastDrawCard = null
+    this.canPlayAfterDraw = false
 
     // Применяем эффект карты
     this.applyCardEffect(card)
@@ -250,10 +256,10 @@ export class GameRoom {
       return
     }
 
-    // Если у игрока осталась одна карта и он не сказал УНО,
-    // он уязвим для штрафа
-    if (player.cards.length === 1 && !player.saidUno) {
-      player.canBePenalized = true
+    // Если у игрока осталась одна карта, он уязвим для штрафа,
+    // пока не скажет УНО
+    if (player.cards.length === 1) {
+      player.canBePenalized = !player.saidUno
     }
 
     // Переходим к следующему игроку только если следующая карта
@@ -287,22 +293,41 @@ export class GameRoom {
         this.nextTurn()
         break
       case '+2':
-        this.nextTurn()
-        const nextPlayer = this.players.find(player => player.id === this.getCurrentPlayerId())
-        if (nextPlayer) {
-          nextPlayer.cards.push(...this.cards.splice(0, 2))
-          nextPlayer.cardsCount = nextPlayer.cards.length
+        // Проверяем, есть ли у следующего игрока +2
+        const nextPlayer = this.getNextPlayer()
+        const has2 = nextPlayer.cards.some(c => c.value === '+2')
+        if (!has2) {
+          // Если нет +2, игрок берет все накопленные карты
+          this.drawStack += 2
+          this.giveStackedCards()
         }
+        this.nextTurn()
         break
       case '+4':
-        this.nextTurn()
-        const player = this.players.find(player => player.id === this.getCurrentPlayerId())
-        if (player) {
-          player.cards.push(...this.cards.splice(0, 4))
-          player.cardsCount = player.cards.length
+        // Аналогично для +4
+        const nextPlayerFor4 = this.getNextPlayer()
+        const has4 = nextPlayerFor4.cards.some(c => c.value === '+4')
+        if (!has4) {
+          this.drawStack += 4
+          this.giveStackedCards()
         }
+        this.nextTurn()
         break
     }
+  }
+
+  private giveStackedCards(): void {
+    if (this.drawStack > 0) {
+      const player = this.getNextPlayer()
+      player.cards.push(...this.cards.splice(0, this.drawStack))
+      player.cardsCount = player.cards.length
+      this.drawStack = 0
+    }
+  }
+
+  private getNextPlayer(): Player {
+    const nextIndex = (this.currentPlayerIndex + this.direction + this.players.length) % this.players.length
+    return this.players[nextIndex]
   }
 
   public drawCard(playerId: string): void {
@@ -318,21 +343,28 @@ export class GameRoom {
     if (card) {
       player.cards.push(card)
       player.cardsCount = player.cards.length
+      this.lastDrawCard = card
+      
+      // Проверяем, можно ли сыграть взятую карту
+      this.canPlayAfterDraw = this.canPlayCard(card)
+      
+      // Если карту нельзя сыграть, переходим к следующему игроку
+      if (!this.canPlayAfterDraw) {
+        this.nextTurn()
+      }
+      // Если карту можно сыграть, игрок может либо сыграть её, либо оставить
     }
-
-    // Переходим к следующему игроку
-    this.nextTurn()
   }
 
   public sayUno(playerId: string): void {
     const player = this.players.find(player => player.id === playerId)
     if (!player) return
 
-    if (player.cards.length <= 2) {
+    if (player.cards.length === 1) {
       player.saidUno = true
       player.canBePenalized = false
     } else {
-      throw new Error('Можно говорить УНО только когда у вас осталась одна или две карты')
+      throw new Error('Можно говорить УНО только когда у вас осталась одна карта')
     }
   }
 
