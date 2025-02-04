@@ -40,6 +40,9 @@ const pulseAnimation = keyframes`
   100% { transform: scale(1); }
 `
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_INTERVAL = 3000; // увеличиваем до 3 секунд
+
 const Game = () => {
   const { roomId } = useParams()
   const [searchParams] = useSearchParams()
@@ -83,189 +86,238 @@ const Game = () => {
 
     if (!name || isNameModalOpen) return
 
-    setIsConnecting(true)
-    setConnectionError(null)
+    let reconnectAttempts = 0;
+    let reconnectTimer: NodeJS.Timeout;
+    let socket: Socket | null = null;
 
-    try {
-      const newSocket = io('http://localhost:3001', {
-        query: { 
-          roomId, 
-          playerName: name,
-          isHost: localStorage.getItem(`host_${roomId}`) === 'true'
-        },
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
-      })
+    const connectToServer = async () => {
+      if (socket?.connected) return;
+      
+      setIsConnecting(true)
+      setConnectionError(null)
 
-      newSocket.on('connect', () => {
-        console.log('Подключено к серверу')
-        setIsConnecting(false)
-        setConnectionError(null)
-        toast({
-          title: 'Подключено',
-          description: 'Успешное подключение к серверу',
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
+      try {
+        const newSocket = io(import.meta.env.VITE_SERVER_URL, {
+          query: { 
+            roomId, 
+            playerName: name,
+            isHost: localStorage.getItem(`host_${roomId}`) === 'true'
+          },
+          reconnection: true,
+          reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+          reconnectionDelay: RECONNECT_INTERVAL,
+          timeout: 10000, // увеличиваем таймаут до 10 секунд
+          forceNew: true,
+          transports: ['websocket', 'polling'],
+          upgrade: true,
+          rememberUpgrade: true,
+          secure: true,
+          rejectUnauthorized: false
         })
-      })
 
-      newSocket.on('connect_error', (error) => {
-        console.error('Ошибка подключения:', error)
-        setIsConnecting(false)
-        setConnectionError('Не удалось подключиться к серверу. Убедитесь, что сервер запущен.')
-        toast({
-          title: 'Ошибка подключения',
-          description: 'Не удалось подключиться к серверу. Убедитесь, что сервер запущен.',
-          status: 'error',
-          duration: null,
-          isClosable: true,
+        socket = newSocket;
+        setSocket(newSocket)
+
+        newSocket.on('connect', () => {
+          console.log('Подключено к серверу')
+          setIsConnecting(false)
+          setConnectionError(null)
+          reconnectAttempts = 0;
+          toast({
+            title: 'Подключено',
+            description: 'Успешное подключение к серверу',
+            status: 'success',
+            duration: 3000,
+            isClosable: true,
+          })
         })
-      })
 
-      setSocket(newSocket)
-
-      newSocket.on('gameState', (state: any) => {
-        console.log('Получено состояние игры:', state)
-        console.log('isHost до обновления:', isHost)
-        setPlayers(state.players || [])
-        
-        // Находим текущего игрока и его карты
-        const currentPlayer = state.players?.find((p: Player) => p.id === newSocket.id)
-        console.log('Текущий игрок:', currentPlayer)
-        console.log('ID сокета:', newSocket.id)
-        console.log('Карты игрока:', currentPlayer?.cards)
-        
-        setCards(currentPlayer?.cards || [])
-        console.log('Установленные карты:', currentPlayer?.cards || [])
-        
-        setCurrentCard(state.currentCard)
-        setCurrentPlayer(state.currentPlayer)
-        setGameStarted(state.gameStarted)
-        
-        // Проверяем, является ли текущий игрок хостом
-        const isCurrentPlayerHost = currentPlayer?.isHost || false
-        setIsHost(isCurrentPlayerHost)
-        
-        console.log('isHost после обновления:', isCurrentPlayerHost)
-        setGameDirection(state.direction)
-        setLastAction(state.lastAction || '')
-        setCanSayUno(currentPlayer?.cards?.length === 2)
-      })
-
-      newSocket.on('playerJoined', (player: Player) => {
-        setPlayers(currentPlayers => {
-          const playerExists = currentPlayers.some(p => p.id === player.id)
-          if (!playerExists) {
-            return [...currentPlayers, player]
-          }
-          return currentPlayers
-        })
-        setLastAction(`Игрок ${player.name} присоединился к игре`)
-      })
-
-      newSocket.on('playerLeft', (playerId: string) => {
-        setPlayers(currentPlayers => {
-          const player = currentPlayers.find(p => p.id === playerId)
-          const newPlayers = currentPlayers.filter(p => p.id !== playerId)
-          if (player) {
-            setLastAction(`Игрок ${player.name} покинул игру`)
+        newSocket.on('connect_error', (error) => {
+          console.error('Ошибка подключения:', error)
+          
+          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            setConnectionError(`Подключение к серверу... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
             
-            // Если игрок был хостом, передаем хоста следующему игроку
-            if (player.isHost && newPlayers.length > 0) {
-              const newHost = newPlayers[0]
-              if (newHost.id === socket?.id) {
-                setIsHost(true)
-                localStorage.setItem(`host_${roomId}`, 'true')
-                socket.emit('transferHost', { newHostId: newHost.id })
+            // Немедленно пытаемся переподключиться
+            reconnectTimer = setTimeout(connectToServer, RECONNECT_INTERVAL);
+          } else {
+            setIsConnecting(false)
+            setConnectionError('Сервер недоступен. Попробуйте позже.')
+            toast({
+              title: 'Ошибка подключения',
+              description: 'Сервер временно недоступен. Попробуйте позже.',
+              status: 'error',
+              duration: null,
+              isClosable: true,
+            })
+          }
+        })
+
+        newSocket.on('gameState', (state: any) => {
+          console.log('Получено состояние игры:', state)
+          console.log('isHost до обновления:', isHost)
+          setPlayers(state.players || [])
+          
+          // Находим текущего игрока и его карты
+          const currentPlayer = state.players?.find((p: Player) => p.id === newSocket.id)
+          console.log('Текущий игрок:', currentPlayer)
+          console.log('ID сокета:', newSocket.id)
+          console.log('Карты игрока:', currentPlayer?.cards)
+          
+          setCards(currentPlayer?.cards || [])
+          console.log('Установленные карты:', currentPlayer?.cards || [])
+          
+          setCurrentCard(state.currentCard)
+          setCurrentPlayer(state.currentPlayer)
+          setGameStarted(state.gameStarted)
+          
+          // Проверяем, является ли текущий игрок хостом
+          const isCurrentPlayerHost = currentPlayer?.isHost || false
+          setIsHost(isCurrentPlayerHost)
+          
+          console.log('isHost после обновления:', isCurrentPlayerHost)
+          setGameDirection(state.direction)
+          setLastAction(state.lastAction || '')
+          setCanSayUno(currentPlayer?.cards?.length === 2)
+        })
+
+        newSocket.on('playerJoined', (player: Player) => {
+          setPlayers(currentPlayers => {
+            const playerExists = currentPlayers.some(p => p.id === player.id)
+            if (!playerExists) {
+              return [...currentPlayers, player]
+            }
+            return currentPlayers
+          })
+          setLastAction(`Игрок ${player.name} присоединился к игре`)
+        })
+
+        newSocket.on('playerLeft', (playerId: string) => {
+          setPlayers(currentPlayers => {
+            const player = currentPlayers.find(p => p.id === playerId)
+            const newPlayers = currentPlayers.filter(p => p.id !== playerId)
+            if (player) {
+              setLastAction(`Игрок ${player.name} покинул игру`)
+              
+              // Если игрок был хостом, передаем хоста следующему игроку
+              if (player.isHost && newPlayers.length > 0) {
+                const newHost = newPlayers[0]
+                if (newHost.id === socket?.id) {
+                  setIsHost(true)
+                  localStorage.setItem(`host_${roomId}`, 'true')
+                  socket.emit('transferHost', { newHostId: newHost.id })
+                }
               }
             }
+            return newPlayers
+          })
+        })
+
+        newSocket.on('hostTransferred', (newHostId: string) => {
+          setPlayers(currentPlayers =>
+            currentPlayers.map(player => ({
+              ...player,
+              isHost: player.id === newHostId
+            }))
+          )
+          if (newHostId === socket?.id) {
+            setIsHost(true)
+            localStorage.setItem(`host_${roomId}`, 'true')
           }
-          return newPlayers
         })
-      })
 
-      newSocket.on('hostTransferred', (newHostId: string) => {
-        setPlayers(currentPlayers =>
-          currentPlayers.map(player => ({
-            ...player,
-            isHost: player.id === newHostId
-          }))
-        )
-        if (newHostId === socket?.id) {
-          setIsHost(true)
-          localStorage.setItem(`host_${roomId}`, 'true')
+        newSocket.on('nameTaken', () => {
+          toast({
+            title: 'Ошибка',
+            description: 'Это имя уже занято в комнате',
+            status: 'error',
+            duration: 3000,
+            isClosable: true,
+          })
+          setIsNameModalOpen(true)
+        })
+
+        newSocket.on('error', (error: string) => {
+          toast({
+            title: 'Ошибка',
+            description: error,
+            status: 'error',
+            duration: 3000,
+            isClosable: true,
+          })
+        })
+
+        newSocket.on('gameOver', ({ winnerId, winnerName }) => {
+          toast({
+            title: winnerId === socket?.id ? 'Поздравляем!' : 'Игра окончена',
+            description: winnerId === socket?.id 
+              ? 'Вы победили!' 
+              : `Игрок ${winnerName} победил!`,
+            status: winnerId === socket?.id ? 'success' : 'info',
+            duration: null,
+            isClosable: true,
+          })
+          setGameStarted(false)
+        })
+
+        newSocket.on('unoSaid', ({ playerId }) => {
+          const playerName = players.find(p => p.id === playerId)?.name
+          toast({
+            title: 'УНО!',
+            description: `Игрок ${playerName} сказал УНО!`,
+            status: 'warning',
+            duration: 2000,
+            isClosable: true,
+          })
+        })
+
+        newSocket.on('unoPenalized', ({ targetPlayerId }) => {
+          const playerName = players.find(p => p.id === targetPlayerId)?.name
+          toast({
+            title: 'Штраф за УНО!',
+            description: `Игрок ${playerName} получает +2 карты за не сказанное УНО`,
+            status: 'error',
+            duration: 2000,
+            isClosable: true,
+          })
+        })
+
+        // Автоматическое переподключение при потере соединения
+        newSocket.on('disconnect', () => {
+          console.log('Соединение потеряно. Переподключение...')
+          setConnectionError('Соединение потеряно. Переподключение...')
+          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectTimer = setTimeout(connectToServer, RECONNECT_INTERVAL);
+          }
+        })
+
+        window.addEventListener('beforeunload', () => {
+          newSocket.disconnect()
+        })
+
+        return () => {
+          clearTimeout(reconnectTimer);
+          newSocket.disconnect()
         }
-      })
-
-      newSocket.on('nameTaken', () => {
-        toast({
-          title: 'Ошибка',
-          description: 'Это имя уже занято в комнате',
-          status: 'error',
-          duration: 3000,
-          isClosable: true,
-        })
-        setIsNameModalOpen(true)
-      })
-
-      newSocket.on('error', (error: string) => {
-        toast({
-          title: 'Ошибка',
-          description: error,
-          status: 'error',
-          duration: 3000,
-          isClosable: true,
-        })
-      })
-
-      newSocket.on('gameOver', ({ winnerId, winnerName }) => {
-        toast({
-          title: winnerId === socket?.id ? 'Поздравляем!' : 'Игра окончена',
-          description: winnerId === socket?.id 
-            ? 'Вы победили!' 
-            : `Игрок ${winnerName} победил!`,
-          status: winnerId === socket?.id ? 'success' : 'info',
-          duration: null,
-          isClosable: true,
-        })
-        setGameStarted(false)
-      })
-
-      newSocket.on('unoSaid', ({ playerId }) => {
-        const playerName = players.find(p => p.id === playerId)?.name
-        toast({
-          title: 'УНО!',
-          description: `Игрок ${playerName} сказал УНО!`,
-          status: 'warning',
-          duration: 2000,
-          isClosable: true,
-        })
-      })
-
-      newSocket.on('unoPenalized', ({ targetPlayerId }) => {
-        const playerName = players.find(p => p.id === targetPlayerId)?.name
-        toast({
-          title: 'Штраф за УНО!',
-          description: `Игрок ${playerName} получает +2 карты за не сказанное УНО`,
-          status: 'error',
-          duration: 2000,
-          isClosable: true,
-        })
-      })
-
-      window.addEventListener('beforeunload', () => {
-        newSocket.disconnect()
-      })
-
-      return () => {
-        newSocket.disconnect()
+      } catch (error) {
+        console.error('Ошибка при создании сокета:', error)
+        setIsConnecting(false)
+        setConnectionError('Ошибка подключения к серверу')
+        
+        // Пытаемся переподключиться немедленно
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          reconnectTimer = setTimeout(connectToServer, RECONNECT_INTERVAL);
+        }
       }
-    } catch (error) {
-      console.error('Ошибка при создании сокета:', error)
-      setIsConnecting(false)
-      setConnectionError('Произошла ошибка при подключении к серверу')
+    }
+
+    // Немедленно пытаемся подключиться
+    connectToServer();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      socket?.disconnect();
     }
   }, [roomId, name, isNameModalOpen, navigate, toast])
 

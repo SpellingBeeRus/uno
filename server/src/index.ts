@@ -12,15 +12,33 @@ dotenv.config()
 const app = express()
 app.use(cors({
   origin: process.env.CLIENT_URL || "http://localhost:3000",
-  methods: ["GET", "POST"]
+  methods: ["GET", "POST"],
+  credentials: true
 }))
 
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  pingTimeout: 10000,
+  pingInterval: 3000,
+  transports: ['websocket', 'polling'],
+  allowUpgrades: true,
+  upgradeTimeout: 10000,
+  maxHttpBufferSize: 1e8
+})
+
+// Добавляем обработку ошибок для сервера
+httpServer.on('error', (error) => {
+  console.error('Server error:', error)
+})
+
+// Добавляем обработку ошибок для socket.io
+io.engine.on('connection_error', (error) => {
+  console.error('Socket.io connection error:', error)
 })
 
 // Подключаемся к MongoDB
