@@ -165,11 +165,14 @@ export class GameRoom {
       gameStarted: this.gameStarted,
       direction: this.direction,
       settings: this.settings,
-      isHost: currentPlayer?.isHost || false
+      isHost: currentPlayer?.isHost || false,
+      // Добавляем недостающие свойства
+      canPlayAfterDraw: this.canPlayAfterDraw,
+      lastDrawCard: this.lastDrawCard,
+      drawStack: this.drawStack
     }
   }
-
-  // Добавляем новый метод для получения состояния для конкретного игрока
+  
   public getStateForPlayer(playerId: string): GameState {
     const baseState = this.getState();
     const player = this.players.find(p => p.id === playerId);
@@ -181,10 +184,7 @@ export class GameRoom {
           p.id === playerId 
             ? { ...p, cards: player.cards } // Показываем карты только текущему игроку
             : p // Оставляем пустые карты для других игроков
-        ),
-        canPlayAfterDraw: this.canPlayAfterDraw,
-        lastDrawCard: this.lastDrawCard,
-        drawStack: this.drawStack
+        )
       };
     }
     
